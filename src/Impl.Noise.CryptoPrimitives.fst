@@ -210,9 +210,9 @@ let aead_encrypt_cp fs key nonce aad_len aad plen plain cipher =
   let output : lbuffer uint8 plen = sub cipher 0ul plen in
   let tag : aead_tag_t = sub cipher plen aead_tag_vs in
   begin match with_norm(fs) with
-  | ImplPolyFields.M32 -> ImplCP32.aead_encrypt key n12 aad_len aad plen plain output tag
-  | ImplPolyFields.M128 -> ImplCP128.aead_encrypt key n12 aad_len aad plen plain output tag
-  | ImplPolyFields.M256 -> ImplCP256.aead_encrypt key n12 aad_len aad plen plain output tag
+  | ImplPolyFields.M32 -> ImplCP32.encrypt output tag plain plen aad aad_len key n12
+  | ImplPolyFields.M128 -> ImplCP128.encrypt output tag plain plen aad aad_len key n12
+  | ImplPolyFields.M256 -> ImplCP256.encrypt output tag plain plen aad aad_len key n12
   end;
   (**) let h1 = HST.get () in
   (**) assert(h1.[|cipher|] `S.equal` (concat h1.[|output|] h1.[|tag|]));
@@ -231,9 +231,9 @@ let aead_decrypt_cp fs key nonce aad_len aad plen plain cipher =
   let tag : aead_tag_t = sub cipher plen aead_tag_vs in
   let r =
     match with_norm(fs) with
-    | ImplPolyFields.M32 -> ImplCP32.aead_decrypt key n12 aad_len aad plen plain output tag
-    | ImplPolyFields.M128 -> ImplCP128.aead_decrypt key n12 aad_len aad plen plain output tag
-    | ImplPolyFields.M256 -> ImplCP256.aead_decrypt key n12 aad_len aad plen plain output tag
+    | ImplPolyFields.M32 -> ImplCP32.decrypt plain output plen aad aad_len key n12 tag
+    | ImplPolyFields.M128 -> ImplCP128.decrypt plain output plen aad aad_len key n12 tag
+    | ImplPolyFields.M256 -> ImplCP256.decrypt plain output plen aad aad_len key n12 tag
   in
   (**) let h1 = HST.get () in
   (**) assert(h1.[|cipher|] `S.equal` (concat h1.[|output|] h1.[|tag|]));
@@ -272,29 +272,32 @@ inline_for_extraction noextract
 val do_incr_hash2 //(#a : hash_alg) (#pre : Type0)
                   (#index : Type0)
                   (#c : I.block index)
+                  (#olen : UInt32.t { UInt32.v olen > 0 })
                   (#i:index)
                   (#t:Type0 { t == (I.Stateful?.s (I.Block?.state c)) i })
                   (#t':Type0 { t' == I.optional_key i c.I.km c.I.key })
                   (alloca : F.alloca_st c i t t')
                   (update : F.update_st c i t t')
-                  (finish : F.finish_st c i t t')
+                  (finish : F.digest_st c i t t')
+                  (l : I.Block?.output_length_t c { I.Block?.output_length c i l == UInt32.v olen })
                   (k : (I.Stateful?.s (I.Block?.key c) i)) :
-  hash : lbuffer uint8 (I.Block?.output_len c i) ->
+  hash : lbuffer uint8 olen ->
   inlen : size_t ->
   input : lbuffer uint8 inlen ->
   Stack (rtype hash_return_type)
   (requires (fun h ->
     I.Stateful?.invariant (I.Block?.key c) #i h k /\
     live h hash /\ live h input /\
-    v (I.Block?.output_len c i) + size_v inlen <= I.Block?.max_input_length c i
+    UInt32.v (I.Block?.init_input_len c i) + UInt32.v olen + size_v inlen <= UInt64.v (I.Block?.max_input_len c i)
     ))
   (ensures (fun h0 _ h1 ->
     modifies1 hash h0 h1 /\
     h1.[|hash|] `S.equal`
     I.Block?.spec_s c i (I.Stateful?.v (I.Block?.key c) i h0 k)
-                        (Seq.append h0.[|hash|] h0.[|input|])))
+                        (Seq.append h0.[|hash|] h0.[|input|])
+                        l))
 
-let do_incr_hash2 #index #c #i #t #t' alloca update finish k =
+let do_incr_hash2 #index #c #olen #i #t #t' alloca update finish l k =
   fun hash inlen input ->
   (**) let h0 = HST.get () in
   push_frame ();
@@ -302,10 +305,12 @@ let do_incr_hash2 #index #c #i #t #t' alloca update finish k =
   (**) I.Stateful?.frame_invariant (I.Block?.key c) B.loc_none k h0 h1;
   (**) assert(I.Stateful?.invariant (I.Block?.key c) h1 k);
   let s = alloca k in
-  update s hash (I.Block?.output_len c i);
+  let r = update s hash olen in
+  assert(r == Hacl.Streaming.Types.Success);
   (**) assert(Seq.Base.append Seq.Base.empty h0.[|hash|] `Seq.equal` h0.[|hash|]);
-  update s input inlen;
-  finish s hash;
+  let r = update s input inlen in
+  assert(r == Hacl.Streaming.Types.Success);
+  finish s hash l;
   (* There is no need to memzero the state *)
   pop_frame ();
   convert_subtype #unit #(rtype hash_return_type) ()
@@ -313,35 +318,35 @@ let do_incr_hash2 #index #c #i #t #t' alloca update finish k =
 (**** SHA2 *)
 
 let hash_sha2_256 output inlen input =
-  ImplSHA2.hash_256 input inlen output;
+  Hacl.Streaming.SHA2.hash_256 output input inlen;
   convert_subtype #unit #(rtype hash_return_type) ()
 
 let hash_sha2_512 output inlen input =
-  ImplSHA2.hash_512 input inlen output;
+  Hacl.Streaming.SHA2.hash_512 output input inlen;
   convert_subtype #unit #(rtype hash_return_type) ()
 
 let hash2_sha2_256 =
   do_incr_hash2 Hacl.Streaming.SHA2.alloca_256
                 Hacl.Streaming.SHA2.update_256
-                Hacl.Streaming.SHA2.finish_256
-                ()
+                Hacl.Streaming.SHA2.digest_256
+                () ()
 
 let hash2_sha2_512 =
   do_incr_hash2 Hacl.Streaming.SHA2.alloca_512
                 Hacl.Streaming.SHA2.update_512
-                Hacl.Streaming.SHA2.finish_512
-                ()
+                Hacl.Streaming.SHA2.digest_512
+                () ()
 
 let hmac_sha2_256 output keylen key datalen data =
   (**) normalize_term_spec(Hash.max_input_length Hash.SHA2_256);
-  (**) assert(length key <= Hash.max_input_length Hash.SHA2_256);
+  (**) assert(length key <= Some?.v (Hash.max_input_length Hash.SHA2_256));
   (**) assert(Spec.Agile.HMAC.keysized Hash.SHA2_256 (length key));
   Hacl.HMAC.compute_sha2_256 output key keylen data datalen;
   convert_subtype #unit #(rtype hash_return_type) ()
 
 let hmac_sha2_512 output keylen key datalen data =
   (**) normalize_term_spec(Hash.max_input_length Hash.SHA2_512);
-  (**) assert(length key <= Hash.max_input_length Hash.SHA2_512);
+  (**) assert(length key <= Some?.v (Hash.max_input_length Hash.SHA2_512));
   (**) assert(Spec.Agile.HMAC.keysized Hash.SHA2_512 (length key));
   Hacl.HMAC.compute_sha2_512 output key keylen data datalen;
   convert_subtype #unit #(rtype hash_return_type) ()
@@ -351,38 +356,38 @@ let hmac_sha2_512 output keylen key datalen data =
 let hash_blake2 a m output inlen input =
   begin match with_norm(a), with_norm(m) with
   | Hash.Blake2S, ImplBlake2Core.M32 ->
-    ImplBlake2s32.blake2s 32ul output inlen input 0ul (null #MUT #uint8)
+    Hacl.Hash.Blake2s_32.hash output input inlen
   | Hash.Blake2S, ImplBlake2Core.M128 ->
-    ImplBlake2s128.blake2s 32ul output inlen input 0ul (null #MUT #uint8)
+    Hacl.Hash.Blake2s_128.hash output input inlen
   | Hash.Blake2B, ImplBlake2Core.M32 ->
-    ImplBlake2b32.blake2b 64ul output inlen input 0ul (null #MUT #uint8)
+    Hacl.Hash.Blake2b_32.hash output input inlen
   | Hash.Blake2B, ImplBlake2Core.M256 ->
-    ImplBlake2b256.blake2b 64ul output inlen input 0ul (null #MUT #uint8)
+    Hacl.Hash.Blake2b_256.hash output input inlen
   end;
   convert_subtype #unit #(rtype hash_return_type) ()
 
 let hash2_blake2 a m =
   match with_norm(a), with_norm(m) with
   | Hash.Blake2S, ImplBlake2Core.M32 ->
-    do_incr_hash2 Hacl.Streaming.Blake2.blake2s_32_no_key_alloca
-                  Hacl.Streaming.Blake2.blake2s_32_no_key_update
-                  Hacl.Streaming.Blake2.blake2s_32_no_key_finish
-                  ()
+    do_incr_hash2 Hacl.Streaming.Blake2s_32.alloca
+                  Hacl.Streaming.Blake2s_32.update
+                  Hacl.Streaming.Blake2s_32.digest
+                  () ()
   | Hash.Blake2S, ImplBlake2Core.M128 ->
-    do_incr_hash2 Hacl.Streaming.Blake2s_128.blake2s_128_no_key_alloca
-                  Hacl.Streaming.Blake2s_128.blake2s_128_no_key_update
-                  Hacl.Streaming.Blake2s_128.blake2s_128_no_key_finish
-                  ()
+    do_incr_hash2 Hacl.Streaming.Blake2s_128.alloca
+                  Hacl.Streaming.Blake2s_128.update
+                  Hacl.Streaming.Blake2s_128.digest
+                  () ()
   | Hash.Blake2B, ImplBlake2Core.M32 ->
-    do_incr_hash2 Hacl.Streaming.Blake2.blake2b_32_no_key_alloca
-                  Hacl.Streaming.Blake2.blake2b_32_no_key_update
-                  Hacl.Streaming.Blake2.blake2b_32_no_key_finish
-                  ()
+    do_incr_hash2 Hacl.Streaming.Blake2b_32.alloca
+                  Hacl.Streaming.Blake2b_32.update
+                  Hacl.Streaming.Blake2b_32.digest
+                  () ()
   | Hash.Blake2B, ImplBlake2Core.M256 ->
-    do_incr_hash2 Hacl.Streaming.Blake2b_256.blake2b_256_no_key_alloca
-                  Hacl.Streaming.Blake2b_256.blake2b_256_no_key_update
-                  Hacl.Streaming.Blake2b_256.blake2b_256_no_key_finish
-                  ()
+    do_incr_hash2 Hacl.Streaming.Blake2b_256.alloca
+                  Hacl.Streaming.Blake2b_256.update
+                  Hacl.Streaming.Blake2b_256.digest
+                  () ()
 
 let hmac_blake2 a m output keylen key datalen data =
   [@inline_let]

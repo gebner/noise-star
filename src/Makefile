@@ -150,7 +150,7 @@ FSTAR_ROOTS = $(NOISE_HOME)/*.fsti $(addsuffix /*.fst,$(SOURCE_DIRS))
 # mtime of the moved files.
 ifndef NODEPEND
 ifndef MAKE_RESTARTS
-.depend: .FORCE
+.depend: .FORCE obj
 	$(call run-with-log,\
 	  $(FSTAR_NO_FLAGS) --dep full $(FSTAR_ROOTS) $(FSTAR_EXTRACT) > $@\
 	  ,[FSTAR-DEPEND],$(call to-obj-dir,depend))
@@ -163,6 +163,9 @@ endif
 ifeq (,$(filter %-in,$(MAKECMDGOALS)))
 -include .depend
 endif
+
+.PHONY: verify
+verify: $(ALL_CHECKED_FILES)
 
 # Verification
 # ------------

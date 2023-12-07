@@ -664,7 +664,7 @@ let rec is_in_searched_types (debug : bool)
     print_dbg debug "Tv_Arrow:";
     print_dbg debug (term_to_string ty);
      begin match inspect_comp c with
-     | C_Total ret_ty _ ->
+     | C_Total ret_ty ->
        is_in_searched_types debug type_ids arity ret_ty
      | _ -> None
      end
@@ -725,9 +725,9 @@ let rec find_typed_instances (debug : bool) (type_ids : list string) (arity : na
   | Tv_Abs bv body ->
     let e' = push_binder e bv in
     find_typed_instances debug type_ids arity e' body
-  | Tv_Let refcb attrs bv def body ->
+  | Tv_Let refcb attrs bv ty def body ->
     let l1 = find_typed_instances debug type_ids arity e def in
-    let e' = push_binder e (mk_binder bv) in
+    let e' = push_binder e (mk_binder bv ty) in
     let l2 = find_typed_instances debug type_ids arity e' body in
     List.append l1 l2
   | Tv_FVar fv ->
