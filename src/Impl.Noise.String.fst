@@ -88,44 +88,20 @@ let char_to_uint8_bij x = assert_norm(255 < pow2 21)
 val list_seq_index_lem (#a : Type0) (s : Seq.seq a) (i : nat{i < Seq.length s}) :
   Lemma
   (ensures (Seq.index s i == L.index (Seq.seq_to_list s) i))
-  (decreases i)
   [SMTPatOr [[SMTPat (Seq.index s i); SMTPat (Seq.seq_to_list s)];
              [SMTPat (L.index (Seq.seq_to_list s) i)]]]
 
-#push-options "--fuel 1 --ifuel 1"
-let rec list_seq_index_lem #a s i =
-  if i = 0 then ()
-  else 
-    begin
-    Seq.lemma_seq_list_bij s;
-    match Seq.seq_to_list s with
-    | [] -> () // impossible
-    | x :: l1 ->
-      Seq.lemma_list_seq_bij l1;
-      let s1 = Seq.seq_of_list l1 in
-      list_seq_index_lem s1 (i-1)
-    end
-#pop-options
+let list_seq_index_lem s i =
+  Seq.lemma_index_is_nth s i
 
 val seq_list_index_lem (#a : Type0) (l : list a) (i : nat{i < L.length l}) :
   Lemma (requires True)
   (ensures (L.index l i == Seq.index (Seq.seq_of_list l) i))
-  (decreases i)
   [SMTPatOr [[SMTPat (L.index l i); SMTPat (Seq.seq_of_list l)];
              [SMTPat (Seq.index (Seq.seq_of_list l) i)]]]
 
-#push-options "--fuel 1 --ifuel 1"
-let rec seq_list_index_lem l i =
-  if i = 0 then ()
-  else 
-    begin
-    Seq.lemma_list_seq_bij l;
-    match l with
-    | [] -> () // impossible
-    | x :: l1 ->
-      seq_list_index_lem l1 (i-1)
-    end
-#pop-options
+let seq_list_index_lem l i =
+  Seq.lemma_list_seq_bij l
 
 // Magical lemma to reason with sequences and lists
 val list_seq_decompose_index_lem (s : Seq.seq char_t) :
